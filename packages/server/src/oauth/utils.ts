@@ -1206,6 +1206,7 @@ async function tryExternalAuth(
     // Not a configured external auth provider
     return undefined;
   }
+  warnOnExternalAuthAudienceMismatch(externalAuthConfig, claims);
 
   const redis = getCacheRedis();
   const redisKey = `medplum:ext-auth:${issuer}:${hashCode(accessToken)}`;
@@ -1240,84 +1241,26 @@ async function tryExternalAuthLogin(
   claims: JWTPayload,
   externalAuthConfig: MedplumExternalAuthConfig
 ): Promise<Pick<AuthState, 'login' | 'project' | 'membership'> | undefined> {
-  // To ensure broad compatibility, we check for the FHIR user profile in two places:
-  // the standard `fhirUser` claim and `ext.fhirUser` for identity providers
-  // that automatically place custom claims in an `ext` block.
-  const extensions = claims.ext as Record<string, unknown> | undefined;
-  const profileString = claims.fhirUser ?? extensions?.fhirUser;
-
-  // If neither fhirUser nor sub is present, we cannot identify the user
-  if (!isString(profileString) && !isString(claims.sub)) {
+  if (!externalAuthConfig.identityProvider && !hasLegacyExternalBearerIdentity(claims)) {
     return undefined;
   }
 
   // Validate the token against the external IDP's userinfo endpoint
+  let userInfo: JWTPayload;
   try {
     const userInfoUrl = externalAuthConfig.identityProvider?.userInfoUrl ?? externalAuthConfig.userInfoUrl;
     if (!userInfoUrl) {
       return undefined;
     }
-    await getExternalUserInfo(userInfoUrl, accessToken, externalAuthConfig.identityProvider);
+    userInfo = await getExternalUserInfo(userInfoUrl, accessToken, externalAuthConfig.identityProvider);
   } catch (err: any) {
     getLogger().warn('Failed to get external user info', err);
     return undefined;
   }
 
-  let membership: WithId<ProjectMembership> | undefined;
-
-  if (isString(profileString)) {
-    // Path A: fhirUser claim present - look up profile, then find membership
-    // Profile string can be either a reference or a search string
-    let searchRequest: SearchRequest<ProfileResource>;
-    const queryIndex = profileString.indexOf('?');
-    if (queryIndex > -1) {
-      // Search string can be either relative (e.g. `Patient?identifier=foo`),
-      // or absolute (e.g. `https://idp.example.com/fhir/Patient?identifier=bar`)
-      // Isolate the resource type and query string from any preceding URL parts
-      const startIndex = profileString.lastIndexOf('/', queryIndex);
-      searchRequest = parseSearchRequest(profileString.substring(startIndex + 1));
-    } else {
-      const [resourceType, id] = profileString.split('/');
-      searchRequest = {
-        resourceType: resourceType as ProfileResource['resourceType'],
-        filters: [{ code: '_id', operator: Operator.EQUALS, value: id }],
-      };
-    }
-
-    // Search for the profile
-    const profile = await systemRepo.searchOne<ProfileResource>(searchRequest);
-    if (!profile) {
-      return undefined;
-    }
-
-    // Search for a ProjectMembership for the profile
-    membership = await systemRepo.searchOne<ProjectMembership>({
-      resourceType: 'ProjectMembership',
-      filters: [{ code: 'profile', operator: Operator.EQUALS, value: getReferenceString(profile) }],
-    });
-  } else {
-    // Path B: sub claim fallback - look up ProjectMembership by externalId
-    // Fetch at most 2 to detect duplicates efficiently; if 2+ exist, the externalId is ambiguous
-    const bundle = await systemRepo.search<ProjectMembership>({
-      resourceType: 'ProjectMembership',
-      filters: [
-        {
-          code: 'external-id',
-          operator: Operator.EXACT,
-          value: claims.sub as string,
-        },
-      ],
-      count: 2,
-    });
-
-    const entries = bundle.entry;
-    if (entries && entries.length > 1) {
-      getLogger().warn('Multiple ProjectMemberships found for external ID', { sub: claims.sub });
-      return undefined;
-    }
-
-    membership = entries?.[0]?.resource;
-  }
+  const membership = externalAuthConfig.identityProvider
+    ? await getExternalBearerMembershipForIdentityProvider(systemRepo, userInfo, externalAuthConfig.identityProvider)
+    : await getLegacyExternalBearerMembership(systemRepo, claims);
 
   if (!membership || membership.active === false) {
     return undefined;
@@ -1353,6 +1296,169 @@ async function tryExternalAuthLogin(
   );
 
   return { login, project, membership };
+}
+
+function hasLegacyExternalBearerIdentity(claims: JWTPayload): boolean {
+  const extensions = claims.ext as Record<string, unknown> | undefined;
+  return isString(claims.fhirUser ?? extensions?.fhirUser) || isString(claims.sub);
+}
+
+async function getLegacyExternalBearerMembership(
+  systemRepo: SystemRepository,
+  claims: JWTPayload
+): Promise<WithId<ProjectMembership> | undefined> {
+  const extensions = claims.ext as Record<string, unknown> | undefined;
+  const profileString = claims.fhirUser ?? extensions?.fhirUser;
+  if (isString(profileString)) {
+    // Path A: fhirUser claim present - look up profile, then find membership
+    // Profile string can be either a reference or a search string
+    return getProjectMembershipByProfileString(systemRepo, profileString);
+  }
+
+  if (isString(claims.sub)) {
+    return getProjectMembershipByExternalId(systemRepo, claims.sub);
+  }
+
+  return undefined;
+}
+
+async function getExternalBearerMembershipForIdentityProvider(
+  systemRepo: SystemRepository,
+  userInfo: JWTPayload,
+  idp: IdentityProvider
+): Promise<WithId<ProjectMembership> | undefined> {
+  const identitySource = getExternalBearerIdentitySource(idp);
+  const identityMappingMode = getExternalBearerIdentityMappingMode(idp);
+
+  if (identitySource === 'email' && identityMappingMode === 'user-email') {
+    const email = isString(userInfo.email) ? userInfo.email.toLowerCase() : undefined;
+    if (!email) {
+      return undefined;
+    }
+    const user = await getUserByEmail(email, undefined);
+    return user ? getOnlyProjectMembershipForUser(systemRepo, user) : undefined;
+  }
+
+  if (identitySource === 'subject' && identityMappingMode === 'project-membership-external-id') {
+    return isString(userInfo.sub) ? getProjectMembershipByExternalId(systemRepo, userInfo.sub) : undefined;
+  }
+
+  if (identitySource === 'fhir-user' && identityMappingMode === 'project-membership-profile') {
+    const extensions = userInfo.ext as Record<string, unknown> | undefined;
+    const profileString = userInfo.fhirUser ?? extensions?.fhirUser;
+    return isString(profileString) ? getProjectMembershipByProfileString(systemRepo, profileString) : undefined;
+  }
+
+  getLogger().warn('Unsupported identity provider configuration for external bearer token', {
+    identitySource,
+    identityMappingMode,
+  });
+  return undefined;
+}
+
+function getExternalBearerIdentitySource(idp: IdentityProvider): NonNullable<IdentityProvider['identitySource']> {
+  return idp.identitySource ?? (idp.useSubject ? 'subject' : 'email');
+}
+
+function getExternalBearerIdentityMappingMode(
+  idp: IdentityProvider
+): NonNullable<IdentityProvider['identityMappingMode']> {
+  return idp.identityMappingMode ?? (idp.useSubject ? 'project-membership-external-id' : 'user-email');
+}
+
+async function getProjectMembershipByProfileString(
+  systemRepo: SystemRepository,
+  profileString: string
+): Promise<WithId<ProjectMembership> | undefined> {
+  let searchRequest: SearchRequest<ProfileResource>;
+  const queryIndex = profileString.indexOf('?');
+  if (queryIndex > -1) {
+    // Search string can be either relative (e.g. `Patient?identifier=foo`),
+    // or absolute (e.g. `https://idp.example.com/fhir/Patient?identifier=bar`)
+    // Isolate the resource type and query string from any preceding URL parts
+    const startIndex = profileString.lastIndexOf('/', queryIndex);
+    searchRequest = parseSearchRequest(profileString.substring(startIndex + 1));
+  } else {
+    const [resourceType, id] = profileString.split('/');
+    searchRequest = {
+      resourceType: resourceType as ProfileResource['resourceType'],
+      filters: [{ code: '_id', operator: Operator.EQUALS, value: id }],
+    };
+  }
+
+  const profile = await systemRepo.searchOne<ProfileResource>(searchRequest);
+  if (!profile) {
+    return undefined;
+  }
+
+  return systemRepo.searchOne<ProjectMembership>({
+    resourceType: 'ProjectMembership',
+    filters: [{ code: 'profile', operator: Operator.EQUALS, value: getReferenceString(profile) }],
+  });
+}
+
+async function getProjectMembershipByExternalId(
+  systemRepo: SystemRepository,
+  externalId: string
+): Promise<WithId<ProjectMembership> | undefined> {
+  // Fetch at most 2 to detect duplicates efficiently; if 2+ exist, the externalId is ambiguous.
+  const bundle = await systemRepo.search<ProjectMembership>({
+    resourceType: 'ProjectMembership',
+    filters: [
+      {
+        code: 'external-id',
+        operator: Operator.EXACT,
+        value: externalId,
+      },
+    ],
+    count: 2,
+  });
+
+  const entries = bundle.entry;
+  if (entries && entries.length > 1) {
+    getLogger().warn('Multiple ProjectMemberships found for external ID', { externalId });
+    return undefined;
+  }
+
+  return entries?.[0]?.resource;
+}
+
+async function getOnlyProjectMembershipForUser(
+  systemRepo: SystemRepository,
+  user: WithId<User>
+): Promise<WithId<ProjectMembership> | undefined> {
+  const bundle = await systemRepo.search<ProjectMembership>({
+    resourceType: 'ProjectMembership',
+    filters: [{ code: 'user', operator: Operator.EQUALS, value: getReferenceString(user) }],
+    count: 2,
+  });
+
+  const entries = bundle.entry;
+  if (entries && entries.length > 1) {
+    getLogger().warn('Multiple ProjectMemberships found for external auth user', { user: getReferenceString(user) });
+    return undefined;
+  }
+
+  return entries?.[0]?.resource;
+}
+
+function warnOnExternalAuthAudienceMismatch(externalAuthConfig: MedplumExternalAuthConfig, claims: JWTPayload): void {
+  const expectedAudience = externalAuthConfig.audience;
+  if (!expectedAudience) {
+    return;
+  }
+
+  const expected = Array.isArray(expectedAudience) ? expectedAudience : [expectedAudience];
+  const actual = Array.isArray(claims.aud) ? claims.aud : claims.aud ? [claims.aud] : [];
+  if (expected.some((audience) => actual.includes(audience))) {
+    return;
+  }
+
+  getLogger().warn('External JWT bearer token audience mismatch', {
+    issuer: externalAuthConfig.issuer,
+    expectedAudience,
+    actualAudience: claims.aud,
+  });
 }
 
 /**

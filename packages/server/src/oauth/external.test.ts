@@ -9,9 +9,10 @@ import request from 'supertest';
 import { vi } from 'vitest';
 import { inviteUser } from '../admin/invite';
 import { initApp, shutdownApp } from '../app';
-import { loadTestConfig } from '../config/loader';
+import { getConfig, loadTestConfig } from '../config/loader';
 import type { SystemRepository } from '../fhir/repo';
 import { getProjectSystemRepo } from '../fhir/repo';
+import { globalLogger } from '../logger';
 import { createTestProject } from '../test.setup';
 import { mockFetchJson } from '../test.setup.fetch';
 
@@ -22,6 +23,7 @@ describe('External auth', () => {
   const app = express();
   const npi = randomUUID();
   const externalSub = randomUUID();
+  const email = `external-${randomUUID()}@example.com`;
   let testProject: WithId<Project>;
   let practitioner: WithId<ProfileResource>;
   let systemRepo: SystemRepository;
@@ -64,6 +66,15 @@ describe('External auth', () => {
       firstName: 'External',
       lastName: 'User',
       externalId: externalSub,
+    });
+
+    await inviteUser({
+      project,
+      resourceType: 'Practitioner',
+      firstName: 'Email',
+      lastName: 'User',
+      email,
+      sendEmail: false,
     });
   });
 
@@ -214,6 +225,96 @@ describe('External auth', () => {
       .get(`/oauth2/userinfo`)
       .set('Authorization', 'Bearer ' + jwt);
     expect(res.status).toBe(200);
+  });
+
+  test.each([
+    {
+      name: 'email to user membership',
+      identitySource: 'email' as const,
+      identityMappingMode: 'user-email' as const,
+      userInfo: () => ({ email }),
+    },
+    {
+      name: 'subject to membership externalId',
+      identitySource: 'subject' as const,
+      identityMappingMode: 'project-membership-external-id' as const,
+      userInfo: () => ({ sub: externalSub }),
+    },
+    {
+      name: 'fhirUser to profile membership',
+      identitySource: 'fhir-user' as const,
+      identityMappingMode: 'project-membership-profile' as const,
+      userInfo: () => ({ fhirUser: getReferenceString(practitioner) }),
+    },
+  ])('Identity provider config maps $name', async ({ identitySource, identityMappingMode, userInfo }) => {
+    const savedExternalAuthProviders = getConfig().externalAuthProviders;
+    getConfig().externalAuthProviders = [
+      {
+        issuer: 'https://external-auth.example.com',
+        identityProvider: {
+          authorizeUrl: 'https://external-auth.example.com/oauth2/authorize',
+          tokenUrl: 'https://external-auth.example.com/oauth2/token',
+          userInfoUrl: 'https://external-auth.example.com/oauth2/userinfo',
+          clientId: 'external-client',
+          clientSecret: 'external-secret',
+          identitySource,
+          identityMappingMode,
+        },
+      },
+    ];
+
+    try {
+      fetchMock.mockImplementationOnce(() => mockFetchJson(userInfo()));
+
+      const jwt = createFakeJwt({
+        iss: 'https://external-auth.example.com',
+        nonce: randomUUID(),
+      });
+      const res = await request(app)
+        .get(`/oauth2/userinfo`)
+        .set('Authorization', 'Bearer ' + jwt);
+      expect(res.status).toBe(200);
+    } finally {
+      getConfig().externalAuthProviders = savedExternalAuthProviders;
+    }
+  });
+
+  test('Configured audience mismatch logs warning and continues', async () => {
+    const warnSpy = vi.spyOn(globalLogger, 'warn').mockImplementation(() => undefined);
+    const savedExternalAuthProviders = getConfig().externalAuthProviders;
+    getConfig().externalAuthProviders = [
+      {
+        issuer: 'https://external-auth.example.com',
+        audience: 'https://api.medplum.example.com',
+        userInfoUrl: 'https://external-auth.example.com/oauth2/userinfo',
+      },
+    ];
+
+    try {
+      fetchMock.mockImplementationOnce(() => mockFetchJson({ ok: true }));
+
+      const jwt = createFakeJwt({
+        iss: 'https://external-auth.example.com',
+        aud: 'https://other.example.com',
+        sub: externalSub,
+        nonce: randomUUID(),
+      });
+      const res = await request(app)
+        .get(`/oauth2/userinfo`)
+        .set('Authorization', 'Bearer ' + jwt);
+      expect(res.status).toBe(200);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'External JWT bearer token audience mismatch',
+        expect.objectContaining({
+          issuer: 'https://external-auth.example.com',
+          expectedAudience: 'https://api.medplum.example.com',
+          actualAudience: 'https://other.example.com',
+        })
+      );
+    } finally {
+      getConfig().externalAuthProviders = savedExternalAuthProviders;
+      warnSpy.mockRestore();
+    }
   });
 
   test('Sub claim with caching', async () => {

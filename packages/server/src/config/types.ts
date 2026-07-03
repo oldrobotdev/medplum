@@ -305,6 +305,8 @@ export interface MedplumBullmqConfig {
 
 export interface MedplumExternalAuthConfig {
   readonly issuer: string;
+  /** Optional expected audience for external JWT bearer tokens. Mismatches are logged but not rejected. */
+  readonly audience?: string | string[];
   /** Optional client ID used to select this external auth provider during token exchange. */
   readonly clientId?: string;
   /** @deprecated Use identityProvider.userInfoUrl instead. */
