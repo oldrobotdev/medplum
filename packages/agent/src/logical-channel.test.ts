@@ -3,9 +3,9 @@
 
 import { Hl7Message } from '@medplum/core';
 import { describe, expect, test } from 'vitest';
-import { createMockLogger } from './test-utils';
 import type { LogicalChannelField } from './logical-channel';
 import { computeLogicalChannelKey, parseLogicalChannelKeySpec } from './logical-channel';
+import { createMockLogger } from './test-utils';
 
 /**
  * Parses a spec that the caller knows is valid, failing loudly (rather than

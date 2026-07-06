@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 import type { App } from './app';
 import { BaseChannel } from './channel';
 import { ChannelStatsTracker } from './channel-stats-tracker';
+import type { LogicalChannelField } from './logical-channel';
+import { computeLogicalChannelKey, parseLogicalChannelKeySpec } from './logical-channel';
 import type { DurableQueue } from './queue/durable-queue';
 import type { EnqueueResult, InboundRow } from './queue/types';
 import { AckOutcome, DuplicateBehavior, QueueErrorCode } from './queue/types';
@@ -21,8 +23,6 @@ import {
   isRetryMode,
 } from './queue/worker';
 import { getCurrentStats, updateStat } from './stats';
-import type { LogicalChannelField } from './logical-channel';
-import { computeLogicalChannelKey, parseLogicalChannelKeySpec } from './logical-channel';
 
 /**
  * Valid values for the appLevelAck query parameter.
@@ -1213,11 +1213,7 @@ export const DEFAULT_MAX_WORKERS = 1;
  * @param logger - Logger used to warn on an invalid URL param.
  * @returns The resolved pool size (integer >= 1).
  */
-export function resolveMaxWorkers(
-  params: URLSearchParams,
-  agentDefault: number | undefined,
-  logger: ILogger
-): number {
+export function resolveMaxWorkers(params: URLSearchParams, agentDefault: number | undefined, logger: ILogger): number {
   const fromParam = parseRetryNumberParam(params.get('maxWorkers'), 'maxWorkers', 1, logger);
   const resolved = fromParam ?? agentDefault ?? DEFAULT_MAX_WORKERS;
   return Math.max(1, Math.floor(resolved));

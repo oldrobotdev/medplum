@@ -3384,11 +3384,15 @@ describe('AgentHl7Channel logicalChannelKey partitioning', () => {
       getChannelMaxWorkers: vi.fn().mockReturnValue(undefined),
       getChannelLogicalChannelKey: vi.fn().mockReturnValue(undefined),
     } as unknown as App;
-    const channel = new AgentHl7Channel(mockApp, { name: 'vc-channel' } as AgentChannel, {
-      resourceType: 'Endpoint',
-      status: 'active',
-      address: `${ADDR}?logicalChannelKey=`,
-    } as Endpoint);
+    const channel = new AgentHl7Channel(
+      mockApp,
+      { name: 'vc-channel' } as AgentChannel,
+      {
+        resourceType: 'Endpoint',
+        status: 'active',
+        address: `${ADDR}?logicalChannelKey=`,
+      } as Endpoint
+    );
     const reconfigure = (spec: string): void => {
       (channel as unknown as { endpoint: Endpoint }).endpoint = {
         resourceType: 'Endpoint',

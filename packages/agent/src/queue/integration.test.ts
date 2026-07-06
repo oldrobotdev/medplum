@@ -244,16 +244,16 @@ describe('Durable queue integration', () => {
         if (command.type === 'agent:connect:request') {
           socket.send(Buffer.from(JSON.stringify({ type: 'agent:connect:response' })));
         } else if (command.type === 'agent:heartbeat:request') {
-          socket.send(
-            Buffer.from(JSON.stringify({ type: 'agent:heartbeat:response', version: MEDPLUM_VERSION }))
-          );
+          socket.send(Buffer.from(JSON.stringify({ type: 'agent:heartbeat:response', version: MEDPLUM_VERSION })));
         } else if (command.type === 'agent:transmit:request') {
           transmits.push(command);
         }
       });
     });
     const replyTo = (controlId: string): void => {
-      const cmd = transmits.find((t) => Hl7Message.parse(t.body).getSegment('MSH')?.getField(10)?.toString() === controlId);
+      const cmd = transmits.find(
+        (t) => Hl7Message.parse(t.body).getSegment('MSH')?.getField(10)?.toString() === controlId
+      );
       if (!cmd || !serverSocket) {
         throw new Error(`no in-flight transmit for ${controlId}`);
       }
