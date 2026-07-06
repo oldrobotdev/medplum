@@ -10,8 +10,6 @@ import type { Repository } from '../fhir/repo';
 import { generateSecret } from '../oauth/keys';
 import { makeValidationMiddleware } from '../util/validator';
 
-console.log('cache bust');
-
 export const createClientValidator = makeValidationMiddleware([
   body('name').notEmpty().withMessage('Client name is required'),
 ]);
