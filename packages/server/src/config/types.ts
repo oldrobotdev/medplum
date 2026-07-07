@@ -122,7 +122,13 @@ export interface MedplumServerConfig {
   /** Optional threshold in milliseconds for logging and recording high idle time within transactions */
   idleInTransactionLogThresholdMs?: number;
 
-  /** Flag to enable/disable the background worker dispatch service. (default 'true' for enabled) */
+  /**
+   * Flag to enable/disable the background worker dispatch service. (default 'true' for enabled)
+   *
+   * The dispatch worker is the entry point that fans a resource change out to the downstream
+   * background jobs: subscriptions, binary auto-download, and cron. Disabling it therefore
+   * disables all of those features, since none of their jobs are ever queued.
+   */
   dispatchEnabled?: boolean;
 
   /** Flag to enable/disable FHIR subscriptions. (default 'true' for enabled) */
@@ -222,7 +228,12 @@ export interface MedplumServerConfig {
   /** Optional flag to allow external auth providers to use insecure HTTP or local URLs. */
   allowInsecureExternalAuthUrl?: boolean;
 
-  /** Optional list of enabled search parameters by SearchParameter.id.  Default is all search parameters enabled. */
+  /**
+   * Optional list of enabled search parameters by SearchParameter.id. Default is all search parameters enabled.
+   *
+   * Note: Medplum's own search parameters (from search-parameters-medplum.json) are always enabled
+   * regardless of this setting; this list only gates the base FHIR search parameters.
+   */
   enabledSearchParameters?: string[];
 }
 

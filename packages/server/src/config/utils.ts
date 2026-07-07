@@ -107,6 +107,8 @@ type DefaultConfigKeys =
   | 'defaultProjectFeatures'
   | 'defaultProjectSystemSetting'
   | 'emailProvider'
+  | 'dispatchEnabled'
+  | 'subscriptionsEnabled'
   | 'rateLimitsEnabled'
   | 'defaultRateLimit'
   | 'defaultAuthRateLimit'
@@ -172,6 +174,8 @@ const booleanKeys = new Set([
   'allowInsecureExternalAuthUrl',
   'allowInsecureRestHookUrl',
   'botCustomFunctionsEnabled',
+  'dispatchEnabled',
+  'subscriptionsEnabled',
   'database.ssl.rejectUnauthorized',
   'database.ssl.require',
   'database.disableConnectionConfiguration',
@@ -216,7 +220,11 @@ export function isObjectConfig(key: string): boolean {
   return objectKeys.has(key);
 }
 
-const arrayKeys = new Set(['dataWarehouse.includeResourceTypes', 'dataWarehouse.excludeResourceTypes']);
+const arrayKeys = new Set([
+  'dataWarehouse.includeResourceTypes',
+  'dataWarehouse.excludeResourceTypes',
+  'enabledSearchParameters',
+]);
 
 export function isArrayConfig(key: string): boolean {
   return arrayKeys.has(key);

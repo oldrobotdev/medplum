@@ -5,12 +5,14 @@ import { createReference } from '@medplum/core';
 import type { Bot, Patient } from '@medplum/fhirtypes';
 import type { AwsClientStub } from 'aws-sdk-client-mock';
 import { mockClient } from 'aws-sdk-client-mock';
+import type { Mock } from 'vitest';
 import { vi } from 'vitest';
 import { initAppServices, shutdownApp } from '../app';
 import { getConfig, loadTestConfig } from '../config/loader';
 import { Repository } from '../fhir/repo';
 import { getLogger } from '../logger';
 import { createTestProject, withTestContext } from '../test.setup';
+import { getDispatchQueue } from './dispatch';
 import { findAndExecDispatchJob } from './test-utils';
 
 describe('Dispatch Worker', () => {
@@ -60,8 +62,11 @@ describe('Dispatch Worker', () => {
     expect(mockLambdaClient.commandCalls(DeleteFunctionCommand)).toHaveLength(1);
   });
 
-  test('does not dispatch jobs when disabled', async () => {
+  test('does not queue dispatch jobs when disabled', async () => {
     getConfig().dispatchEnabled = false;
+
+    const queue = getDispatchQueue();
+    (queue.add as Mock).mockClear();
 
     const bot = await withTestContext(() =>
       botRepo.createResource<Bot>({
@@ -70,10 +75,9 @@ describe('Dispatch Worker', () => {
         runtimeVersion: 'awslambda',
       })
     );
-
     await withTestContext(() => botRepo.deleteResource('Bot', bot.id));
-    await expect(findAndExecDispatchJob(bot, 'delete')).resolves.toBeUndefined();
 
+    expect(queue.add).not.toHaveBeenCalled();
     expect(mockLambdaClient.commandCalls(DeleteFunctionCommand)).toHaveLength(0);
   });
 

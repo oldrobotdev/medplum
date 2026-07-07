@@ -89,6 +89,10 @@ export async function addDispatchJobs(
   previousVersion: Resource | undefined,
   context: BackgroundJobContext
 ): Promise<void> {
+  if (!getConfig().dispatchEnabled) {
+    return;
+  }
+
   const ctx = tryGetRequestContext();
   await addDispatchJobData({
     resourceType: resource.resourceType,
@@ -114,10 +118,6 @@ async function addDispatchJobData(job: DispatchJobData): Promise<void> {
  * @param job - The dispatch job details.
  */
 export async function execDispatchJob(job: Job<DispatchJobData>): Promise<void> {
-  if (!getConfig().dispatchEnabled) {
-    return;
-  }
-
   const systemRepo = getShardSystemRepo(PLACEHOLDER_SHARD_ID); // shardId will be part of job.data in future
   const { resourceType, id, versionId, previousVersionId } = job.data;
   const resource = await systemRepo.readVersion(resourceType, id, versionId);
