@@ -5,6 +5,7 @@ import {
   Column,
   Condition,
   Conjunction,
+  Constant,
   InsertQuery,
   Parameter,
   SelectQuery,
@@ -201,12 +202,15 @@ export function buildSelectFromHistoryTableQuery(
     inner.whereExpr(sourcePredicate);
   }
 
+  const projectIdExpression = `json_extract_string("src"."content"::JSON, '${PROJECT_ID_JSON_PATH}')`;
+
   return new SelectQuery('src', inner)
     .column('id')
     .column('version_id')
     .column('content')
     .column('last_updated')
-    .raw(`json_extract_string("src"."content"::JSON, '${PROJECT_ID_JSON_PATH}') AS project_id`)
+    .raw(`${projectIdExpression} AS project_id`)
+    .orderByExpr(new Constant(projectIdExpression))
     .orderBy('last_updated');
 }
 
