@@ -184,8 +184,10 @@ export async function processDataWarehouseSyncJob(
       });
 
       let syncDurationSeconds = 0;
+      let watermarkDurationSeconds = 0;
       for (const table of result.tables) {
         syncDurationSeconds += table.syncDurationMs / 1000;
+        watermarkDurationSeconds += table.watermarkDurationMs / 1000;
       }
 
       const tables = result.tables;
@@ -203,7 +205,17 @@ export async function processDataWarehouseSyncJob(
         tablesEmpty,
         rowsInserted,
         tableCounts: Object.fromEntries(tables.map((t) => [t.destination, t.rowsInserted])),
+        tableTimings: Object.fromEntries(
+          tables.map((t) => [
+            t.destination,
+            {
+              syncDurationMs: t.syncDurationMs,
+              watermarkDurationMs: t.watermarkDurationMs,
+            },
+          ])
+        ),
         syncDurationSeconds,
+        watermarkDurationSeconds,
         jobStartTime: jobStartTime.toISOString(),
         jobEndTime: jobEndTime.toISOString(),
         durationSeconds,
